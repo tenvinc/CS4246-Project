@@ -67,7 +67,7 @@ if __name__ == "__main__":
 
         combined_transition_list = []
         # foldername = "easy1_10_20"
-        foldername = "expert_full_10_50"
+        foldername = "easy1_10_20"
         for root, dir, filenames in os.walk(foldername):
             for filename in filenames:
                 if "expert_dem" in filename:
@@ -79,7 +79,7 @@ if __name__ == "__main__":
                             combined_transition_list.append(episode)
                             episode = []
         print(len(combined_transition_list))
-        torch.save({'expert_transitions': combined_transition_list}, f"expert_dem_combined.pt")
+        torch.save({'expert_transitions': combined_transition_list}, f"expert_dem_combined_easy_10_20.pt")
 
 
         # expert = torch.load("expert_dem_2021_04_01_04_22.pt")

@@ -3,3 +3,4 @@ expert_full_10_50/*
 runs/*
 *.pt
 *.pyc
+.neptune/*

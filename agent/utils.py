@@ -2,6 +2,8 @@ from agents import *
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 
+import neptune.new as neptune
+
 def debug_print_transitions(transition):
     state, action, reward, next_state, done = transition.state, transition.action, transition.reward, transition.next_state, transition.done
 
@@ -29,7 +31,61 @@ def debug_print_transitions(transition):
             out += "\n"
         out += "\n"
         print(out)
-    
+
+
+class NepLogger:
+    class __NepLogger:
+        def __init__(self, update_interval=2000):
+            self.logger = None
+            self.update_interval = update_interval
+
+        def __str__(self):
+            return repr(self)
+
+        def initialize_writer(self):
+            self.logger = neptune.init(project='tenvinc/cs4246-project')
+
+        def get_writer(self):
+            return self.logger
+
+        def add_scalar(self, tag, item):
+            self.logger[tag].log(item)
+
+        def add_params(self, params):
+            self.logger["parameters"] = params
+
+    instance = None
+
+    def __init__(self, update_interval):
+        if not NepLogger.instance:
+            NepLogger.instance = NepLogger.__NepLogger(update_interval)
+        
+    def __getattr__(self, name):
+        return getattr(self.instance, name)
+
+    @classmethod
+    def initialize_writer(cls):
+        return cls.instance.initialize_writer()
+
+    @classmethod
+    def get_writer(cls):
+        return cls.instance.get_writer()
+
+    @classmethod
+    def should_update(cls):
+        return cls.instance.num_epochs % cls.instance.update_interval == 0
+
+    @classmethod
+    def add_scalar(cls, tag, item):
+        assert cls.instance is not None
+        # if cls.should_update():
+        cls.instance.add_scalar(tag, item)
+
+    @classmethod
+    def add_params(cls, params):
+        assert cls.instance is not None
+        cls.instance.add_params(params)
+
 class TFWriter:
     class __TFWriter:
         def __init__(self):

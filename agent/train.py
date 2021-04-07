@@ -1,30 +1,30 @@
 """
 This file is used for training the DQN (DQfD)
 """
-
+import neptune.new as neptune
 import torch
 import numpy as np
 import os
 
-from agents import *
+from training_agents import *
 from env import construct_task_env
 
 from utils import *
 
-tfwriter = TFWriter()
+nep_logger = NepLogger(2000)
 
 FAST_DOWNWARD_PATH = "/fast_downward/"
 
 """
 Hyperparameters used for the training
 """
-learning_rate = 1e-3
-max_episodes  = 10000
-pretrain_epochs = 20000
+learning_rate = 1e-4 # learning rate reduced for training model after 5170 episodes
+max_episodes  = 1000000
+pretrain_epochs = 10000
 t_max         = 600
 print_interval= 20
-target_update = 20 # episode(s)
-train_steps   = 20
+target_update = 10 # episode(s)
+train_steps   = 10
 
 def create_agent(test_case_id, *args, **kwargs):
     '''
@@ -39,6 +39,7 @@ def train(agent, env, weights_path=None):
     agent.initialize(**agent_init)
     num_actions = len(env.actions)
 
+    # agent.init_train(expert_demo_path=os.path.join("agent", "expert_dem_combined_easy_10_20.pt"))
     agent.init_train(expert_demo_path=os.path.join("agent", "expert_dem_combined.pt"))
     # agent.init_train()
     rewards = []
@@ -47,17 +48,30 @@ def train(agent, env, weights_path=None):
         'J_DQ': [],
         'Total': []
     }
-    optimizer = torch.optim.Adam(agent.model.parameters(), lr=learning_rate, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(agent.model.parameters(), lr=learning_rate, weight_decay=1e-4)
+
+    NepLogger.initialize_writer()
+    NepLogger.add_params({
+        "weight_decay": 1e-4,
+        "learning_rate": learning_rate,
+        "target_update": target_update,
+        "train_steps": train_steps,
+        "epsilon_decay": epsilon_decay,
+        "gamma": gamma,
+        "max_epsilon": max_epsilon,
+        "min_epsilon": min_epsilon,
+        "batch_size": batch_size,
+        "buffer_limit": buffer_limit,
+        "min_buffer": min_buffer,
+    })
 
     agent.model.train()
     epoch = 0
     if weights_path is None:
         print("Beginning Expert pretraining phase...")
         # Phase 1: Expert initialization phase
-        TFWriter.initialize_writer()
 
         for epoch in range(pretrain_epochs):
-            TFWriter.set_num_epochs(epoch)
             loss, J_E, J_DQ = agent.optimize(optimizer, expert_phase=True)
 
             if epoch % (print_interval * 10) == 0 and epoch > 0:
@@ -80,23 +94,29 @@ def train(agent, env, weights_path=None):
     # Phase 2: Exploration with some sampling of expert data
     print("Beginning exploration and training phase...")
     episode_lens = []
-    TFWriter.initialize_writer()
-    save_filename = "last_model"
+    save_filename = "last_model_50_10"
     for episode in range(max_episodes):
         epsilon = compute_epsilon(episode)
         state = env.reset()
         episode_rewards = 0.0
         experiences = []
-        hidden_state, cell_state = agent.model.reset_hidden_states(1)
+        # hidden_state, cell_state = agent.model.reset_hidden_states(1)
         # Try the epsiode
         for t in range(t_max):
-            action, hidden_state, cell_state = agent.act(state, hidden_state, cell_state, epsilon=epsilon, env=env, manual=manual)
+            # action, hidden_state, cell_state = agent.act(state, hidden_state, cell_state, epsilon=epsilon, env=env, manual=manual)
+            action = agent.act(state, epsilon=epsilon, env=env, manual=manual)
             next_state, reward, done, info = env.step(action)
             experiences.append(Transition(state, [action], [reward], next_state, [done]))
             episode_rewards += reward
             if done:
+                if t > 50:
+                    print(f"Weird value t: {t}")
                 break
             state = next_state
+
+            if len(experiences) > 50:
+                print(f"Found anomaly {len(experiences)}")
+
         rewards.append(episode_rewards)
 
         # Record down all the stuff related to episodes
@@ -109,7 +129,6 @@ def train(agent, env, weights_path=None):
         if agent.enough_memory_train():
             manual = False
             for i in range(train_steps):
-                TFWriter.set_num_epochs(epoch)
                 epoch += 1
                 loss, J_E, J_DQ = agent.optimize(optimizer)
                 losses['Total'].append(loss.item())
@@ -117,10 +136,10 @@ def train(agent, env, weights_path=None):
                 losses['J_E'].append(J_E.item())
 
         if episode % print_interval == 0 and episode > 0:
-            TFWriter.add_scalar('Mean episode length', np.mean(episode_lens[-print_interval:]), epoch)
-            TFWriter.add_scalar('Min episode length', np.min(episode_lens[-print_interval:]), epoch)
-            TFWriter.add_scalar('Max episode length', np.sum(episode_lens[-print_interval:]), epoch)
-            TFWriter.add_scalar('Mean episode reward', np.mean(rewards[-print_interval:]), epoch)
+            NepLogger.add_scalar('Mean episode length', np.mean(episode_lens[-print_interval:]))
+            # NepLogger.add_scalar('Min episode length', np.min(episode_lens[-print_interval:]))
+            # NepLogger.add_scalar('Max episode length', np.sum(episode_lens[-print_interval:]))
+            NepLogger.add_scalar('Mean episode reward', np.mean(rewards[-print_interval:]))
             print("[Episode {}]\tavg rewards : {:.3f},\tavg loss: : {:.6f},\tavg J_E loss {:.6f},\tavg J_DQ loss {:.6f}, \
                     \tbuffer size : {},\t epsilon: {}".format(
                             episode, np.mean(rewards[-print_interval:]), np.mean(losses['Total'][-print_interval*10:]),
@@ -129,12 +148,13 @@ def train(agent, env, weights_path=None):
             
             print("TOTAL: [Episode {}]\tavg rewards : {:.3f},\tavg loss: : {:.6f},\tavg J_E loss {:.6f},\tavg J_DQ loss {:.6f}, \
                     \tbuffer size : {},\t epsilon: {}".format(
-                            episode, np.mean(rewards[print_interval:]), np.mean(losses['Total'][print_interval*10:]),
-                            np.mean(losses['J_E'][print_interval*10:]), np.mean(losses['J_DQ'][print_interval*10:]), 
+                            episode, np.mean(rewards[-print_interval*10:]), np.mean(losses['Total'][-print_interval*10:]),
+                            np.mean(losses['J_E'][-print_interval*10:]), np.mean(losses['J_DQ'][-print_interval*10:]), 
                             len(agent.memory), epsilon * 100))
+            agent.memory.distribution()
 
-        if episode % 2000 == 0:
-            save_filename = "last_model_" + str(episode)
+        if episode % target_update == 0:
+            save_filename = "last_model_50_10_" + str(episode)
 
         # Update target network every once in a while
         if episode % target_update == 0:
