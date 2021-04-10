@@ -6,25 +6,27 @@ import torch
 import numpy as np
 import os
 
-from training_agents import *
+from agents import *
 from env import construct_task_env
 
-from utils import *
+# from utils import *
+from core import *
+from my_logging import *
 
-nep_logger = NepLogger(2000)
+nep_logger = GenericLogger(2000)
 
-FAST_DOWNWARD_PATH = "/fast_downward/"
+# FAST_DOWNWARD_PATH = "/fast_downward/"
 
 """
 Hyperparameters used for the training
 """
-learning_rate = 1e-4 # learning rate reduced for training model after 5170 episodes
-max_episodes  = 1000000
-pretrain_epochs = 10000
-t_max         = 600
-print_interval= 20
-target_update = 10 # episode(s)
-train_steps   = 10
+# learning_rate = 1e-4 # learning rate reduced for training model after 5170 episodes
+# max_episodes  = 1000000
+# pretrain_epochs = 10000
+# t_max         = 600
+# print_interval= 20
+# target_update = 10 # episode(s)
+# train_steps   = 10
 
 def create_agent(test_case_id, *args, **kwargs):
     '''
@@ -34,14 +36,16 @@ def create_agent(test_case_id, *args, **kwargs):
     return DQfDAgent(test_case_id=test_case_id)
 
 
-def train(agent, env, weights_path=None):
+def train(agent, env, weights_path=None, tag=None, disable_il=False):
     agent_init = {'fast_downward_path': FAST_DOWNWARD_PATH, 'agent_speed_range': (-3,-1), 'gamma' : 1}
     agent.initialize(**agent_init)
     num_actions = len(env.actions)
 
-    # agent.init_train(expert_demo_path=os.path.join("agent", "expert_dem_combined_easy_10_20.pt"))
-    agent.init_train(expert_demo_path=os.path.join("agent", "expert_dem_combined.pt"))
-    # agent.init_train()
+    if disable_il:
+        agent.init_train()
+    else:
+        # agent.init_train(expert_demo_path=os.path.join("agent", "expert_dem_combined_easy_10_20.pt"))
+        agent.init_train(expert_demo_path=os.path.join("agent", "expert_dem_combined.pt"))
     rewards = []
     losses = {
         'J_E': [],
@@ -50,8 +54,8 @@ def train(agent, env, weights_path=None):
     }
     optimizer = torch.optim.Adam(agent.model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
-    NepLogger.initialize_writer()
-    NepLogger.add_params({
+    GenericLogger.initialize_writer()
+    GenericLogger.add_params({
         "weight_decay": 1e-4,
         "learning_rate": learning_rate,
         "target_update": target_update,
@@ -65,9 +69,12 @@ def train(agent, env, weights_path=None):
         "min_buffer": min_buffer,
     })
 
+    if opt.tag is not None:
+        GenericLogger.add_tag(opt.tag)
+
     agent.model.train()
     epoch = 0
-    if weights_path is None:
+    if weights_path is None and not disable_il:
         print("Beginning Expert pretraining phase...")
         # Phase 1: Expert initialization phase
 
@@ -83,10 +90,12 @@ def train(agent, env, weights_path=None):
                 agent.update_tgt_train()
             # if epoch % 2 == 0 and epoch > 0:
             #     break
-    else:
+    elif not weights_path is None:
         print("Loading preexisting weights....")
         agent.model.load_state_dict(torch.load(weights_path))
         agent.update_tgt_train()
+    else:
+        print("Imitation learning is disabled.")
 
     # torch.save(agent.target.state_dict(), "phase1.pt")
 
@@ -94,7 +103,7 @@ def train(agent, env, weights_path=None):
     # Phase 2: Exploration with some sampling of expert data
     print("Beginning exploration and training phase...")
     episode_lens = []
-    save_filename = "last_model_50_10"
+    prefix = f"last_model_{INPUT_SHAPE[1]}_{INPUT_SHAPE[2]}_"
     for episode in range(max_episodes):
         epsilon = compute_epsilon(episode)
         state = env.reset()
@@ -136,10 +145,10 @@ def train(agent, env, weights_path=None):
                 losses['J_E'].append(J_E.item())
 
         if episode % print_interval == 0 and episode > 0:
-            NepLogger.add_scalar('Mean episode length', np.mean(episode_lens[-print_interval:]))
-            # NepLogger.add_scalar('Min episode length', np.min(episode_lens[-print_interval:]))
-            # NepLogger.add_scalar('Max episode length', np.sum(episode_lens[-print_interval:]))
-            NepLogger.add_scalar('Mean episode reward', np.mean(rewards[-print_interval:]))
+            GenericLogger.add_scalar('Mean episode length', np.mean(episode_lens[-print_interval:]))
+            # GenericLogger.add_scalar('Min episode length', np.min(episode_lens[-print_interval:]))
+            # GenericLogger.add_scalar('Max episode length', np.sum(episode_lens[-print_interval:]))
+            GenericLogger.add_scalar('Mean episode reward', np.mean(rewards[-print_interval:]))
             print("[Episode {}]\tavg rewards : {:.3f},\tavg loss: : {:.6f},\tavg J_E loss {:.6f},\tavg J_DQ loss {:.6f}, \
                     \tbuffer size : {},\t epsilon: {}".format(
                             episode, np.mean(rewards[-print_interval:]), np.mean(losses['Total'][-print_interval*10:]),
@@ -153,14 +162,14 @@ def train(agent, env, weights_path=None):
                             len(agent.memory), epsilon * 100))
             agent.memory.distribution()
 
-        if episode % target_update == 0:
-            save_filename = "last_model_50_10_" + str(episode)
+        if episode % (target_update*2000) == 0:
+            save_filename = prefix + str(episode)
+            torch.save(agent.target.state_dict(), f"{save_filename}.pt")
 
         # Update target network every once in a while
         if episode % target_update == 0:
             agent.update_tgt_train()
             # print(">>>>>>>>>>> Saving target network to disc")
-            torch.save(agent.target.state_dict(), f"{save_filename}.pt")
 
 
 
@@ -172,33 +181,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights_path', default=None, type=str, help="Path to weights file")
+    parser.add_argument('--tag', default=None, type=str, help="Tag for neptune ai logging")
+    parser.add_argument('--disable-il', default=False, action="store_true", help="Disable imitation learning")
     opt = parser.parse_args()
 
     test_env = construct_task_env()
     agent = create_agent(0)
-    train(agent, test_env, weights_path=opt.weights_path)
-
-        # for run in range(runs):
-        #     state = env.reset()
-        #     agent.reset(state)
-        #     episode_rewards = 0.0
-        #     for t in range(t_max):
-        #         action = agent.step(state)   
-        #         next_state, reward, done, info = env.step(action)
-        #         full_state = {
-        #             'state': state, 'action': action, 'reward': reward, 'next_state': next_state, 
-        #             'done': done, 'info': info
-        #         }
-        #         agent.update(**full_state)
-        #         state = next_state
-        #         episode_rewards += reward
-        #         if done:
-        #             break
-        #     rewards.append(episode_rewards)
-        # avg_rewards = sum(rewards)/len(rewards)
-        # print("{} run(s) avg rewards : {:.1f}".format(runs, avg_rewards))
-        # return avg_rewards
-    
+    train(agent, test_env, weights_path=opt.weights_path, tag=opt.tag, disable_il=opt.disable_il)
 
 
 
