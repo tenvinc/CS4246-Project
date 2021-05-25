@@ -4,6 +4,8 @@ import collections
 import math
 import random
 import numpy as np
+
+from itertools import compress
 import torch.nn.functional as F
 
 from my_logging import *
@@ -32,6 +34,9 @@ Avg reward: ~6 after 24220
 Dqfd with little exploration:
 Consistent nonzero reward: After 4800 episodes
 End result: ~ 5.7 avg reward
+
+Dqfd with adjusting expert samples
+End result: ~6. after 27260 episodes
 """
 
 '''
@@ -46,24 +51,29 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 '''
 Hyperparameters for training
 '''
-learning_rate = 1e-4  # learning rate reduced to 1e-4 for training model after 5170 episodes
-max_episodes  = 1000000
+learning_rate = 1e-3  # learning rate reduced to 1e-4 for training model after 5170 episodes
+max_episodes  = 20000000
 pretrain_epochs = 5000
 t_max         = 600
 print_interval= 20
-target_update = 10 # episode(s)
+target_update = 20 # episode(s)
 train_steps   = 10
-gamma = 0.99
-max_epsilon   = 0.3 # 1st round is 0.1, After 5170 episodes, reduce to 0.01
+gamma = 0.98
+max_epsilon   = 1 # 1st round is 0.1, After 5170 episodes, reduce to 0.01
 min_epsilon   = 0.01
 epsilon_decay = 5000
-batch_size    = 128
-buffer_limit  = 20000  # For non RNN
+batch_size    = 32
+buffer_limit  = 15000  # For non RNN
 min_buffer    = 1000
 dqfd_margin_loss = 0.8
-crash_penalty = -0.5   # penalty for crashing
+crash_penalty = -5   # penalty for crashing
 total_potential_reward = 2   # potential based reward based on distance
 her_constant = 4   # Constant k used in HER
+
+expert_ratio_prob_decay = 500
+min_expert_ratio_prob = 1
+max_expert_ratio_prob = 1
+success_failure_probability = 1  # Probability of success trials being added to the replay memory
 
 '''
 Hindsight Experience Replay
@@ -111,7 +121,7 @@ def her_sample(episode, k=her_constant):
 '''
 Loss functions
 '''
-def compute_dqn_loss(state_action_values, target, states, actions, rewards, next_states, dones):
+def compute_dqn_loss(state_action_values, target, states, actions, rewards, next_states, dones, ret_TD_error=False):
     '''
     Input:
         * `model`       : model network to optimize
@@ -144,7 +154,11 @@ def compute_dqn_loss(state_action_values, target, states, actions, rewards, next
     GenericLogger.add_scalar('average predicted Q value', torch.mean(state_action_values).data)
     GenericLogger.add_scalar('average target Q value', torch.mean(expected_state_action_values).data)
     loss = F.smooth_l1_loss(state_action_values, expected_state_action_values)
-    return loss
+
+    if ret_TD_error:
+        return loss, (expected_state_action_values - state_action_values)
+    else:
+        return loss
 
 def compute_imitation_loss(state_action_values, target_actions, is_expert):
     ''' 
@@ -212,6 +226,15 @@ def compute_epsilon(episode):
     epsilon = min_epsilon + (max_epsilon - min_epsilon) * math.exp(-1. * episode / epsilon_decay)
     return epsilon
 
+'''
+Other Utility functions
+'''
+def compute_expert_ratio_prob(episode):
+    '''
+    COmpute the probability of selecting expert sample to be in the lottery
+    '''
+    expert_ratio_prob = min_expert_ratio_prob + (max_expert_ratio_prob - min_expert_ratio_prob) * math.exp(-1. * episode / expert_ratio_prob_decay)
+    return expert_ratio_prob
 
 '''
 Replay Buffers
@@ -242,16 +265,24 @@ class ReplayBuffer():
 
     def sample_expert(self, batch_size):
         buffer_list = list(self.expert_buffer)
-        return self._sample(batch_size, buffer_list)
+        return self._sample(batch_size, buffer_list, len(buffer_list))
 
-    def sample(self, batch_size):
-        buffer_list = list(self.expert_buffer + self.buffer)
-        return self._sample(batch_size, buffer_list)
+    def sample(self, batch_size, expert_ratio_prob=1.0):
+        '''
+        Inputs:
+            expert_ratio_prob: Probability of an expert sample chosen to be in the set to be sampled
+        '''
+        expert_list = list(self.expert_buffer)
+        expert_sel_idx = (np.random.uniform(size=len(expert_list)) <= expert_ratio_prob).nonzero()[0]
+        filtered_expert_list = [expert_list[i] for i in expert_sel_idx]
+        # print("expert", len(filtered_expert_list))
+        buffer_list = filtered_expert_list + list(self.buffer)
+        return self._sample(batch_size, buffer_list, len(filtered_expert_list))
 
     def distribution(self):
         print(f"Reward distribution {np.mean(list(self.rewards))}")
 
-    def _sample(self, batch_size, buffer_list):
+    def _sample(self, batch_size, buffer_list, expcount):
         ''' 
         Arguments:
             buffer_list: list of all possible transitions in a subset of the replay buffer to choose from
@@ -279,7 +310,7 @@ class ReplayBuffer():
             #     rewards[i, ...] = buffer_list[idx].reward
             next_states[i, ...] = buffer_list[idx].next_state
             dones[i, ...] = buffer_list[idx].done
-            is_expert[i, ...] = (idx < self.expert_count())
+            is_expert[i, ...] = (idx < expcount)
 
         states = torch.from_numpy(states).float().to(device)
         actions = torch.from_numpy(actions).int().to(device)

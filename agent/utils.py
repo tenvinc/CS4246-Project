@@ -43,16 +43,20 @@ class NepLogger:
             return repr(self)
 
         def initialize_writer(self):
-            self.logger = neptune.init(project='tenvinc/cs4246-project')
+            pass
+            # self.logger = neptune.init(project='tenvinc/cs4246-project')
 
         def get_writer(self):
-            return self.logger
+            pass
+            # return self.logger
 
         def add_scalar(self, tag, item):
-            self.logger[tag].log(item)
+            pass
+            # self.logger[tag].log(item)
 
         def add_params(self, params):
-            self.logger["parameters"] = params
+            pass
+            # self.logger["parameters"] = params
 
     instance = None
 

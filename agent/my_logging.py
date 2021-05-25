@@ -1,6 +1,30 @@
 import neptune.new as neptune
 
 default_update_interval = 0  # Not used
+
+class NepLoggerEmpty():
+    ''' NepLogger that does nothing '''
+    def __init__(self, update_interval=default_update_interval):
+        pass
+
+    def __str__(self):
+        return repr(self)
+
+    def initialize_writer(self):
+        pass
+
+    def get_writer(self):
+        pass
+
+    def add_scalar(self, tag, item):
+        pass
+
+    def add_params(self, params):
+        pass
+
+    def add_tag(self, tag):
+        pass
+
 class NepLogger():
     ''' Logger that logs to Neptune.ai '''
     def __init__(self, update_interval=default_update_interval):
@@ -11,7 +35,8 @@ class NepLogger():
         return repr(self)
 
     def initialize_writer(self):
-        self.logger = neptune.init(project='tenvinc/cs4246-project', source_files=['agent/*.py', 'requirements.txt'])
+        self.logger = neptune.init(project='tenvinc/cs4246-project', 
+        source_files=['agent/*.py', 'requirements.txt'])
 
     def get_writer(self):
         return self.logger
@@ -31,7 +56,7 @@ class GenericLogger():
 
     def __init__(self, update_interval=default_update_interval):
         if not GenericLogger.instance:
-            GenericLogger.instance = NepLogger(update_interval)
+            GenericLogger.instance = NepLoggerEmpty(update_interval)
             print(GenericLogger.instance)
         
     def __getattr__(self, name):
