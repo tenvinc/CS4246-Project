@@ -25,9 +25,11 @@ DQfD is based on the idea, that much of the initial exploration can be skipped i
 To run this project, first set up the openai gym environment by downloading the docker build already prepared using `docker pull cs4246/base`. You would need to set up docker beforehand. Next, clone the project, then run `docker run -it --rm -v $PWD:/workspace cs4246/base <command>`. The command to run will be `python <script_path>` where <script_path> is the path to the python script you want to run.
 
 For recording of the demonstration data:
+
 `docker run -it --rm -v $PWD:/workspace cs4246/base python agent/record.py`
 
 For training of the agent:
+
 `docker run -it --rm -v $PWD:/workspace cs4246/base python agent/train.py`
 
 
